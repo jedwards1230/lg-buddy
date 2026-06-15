@@ -1,0 +1,19 @@
+[Unit]
+Description=LG WebOS TV power sync (boot on / shutdown off)
+After=network-online.target
+Wants=network-online.target
+Conflicts=shutdown.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/lg-buddy/bin/lg-buddy on
+ExecStop=/opt/lg-buddy/bin/lg-buddy off
+# Worst-case cold start: nm-online wait + WOL spread + input retries. The old
+# unit used 90s, which the retry path could exceed; 120s gives headroom.
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

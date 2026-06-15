@@ -1,0 +1,10 @@
+[Unit]
+Description=LG WebOS TV wake on resume
+After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/lg-buddy/bin/lg-buddy on
+
+[Install]
+WantedBy=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target

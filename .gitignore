@@ -1,0 +1,6 @@
+# Runtime / deployed artifacts — never committed
+venv/
+*.env
+!*.env.example
+pairing.db
+.DS_Store

@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# lg-buddy-unlock-listen — wake the TV when the desktop session is unlocked.
+#
+# Runs as a per-user systemd service inside the graphical session. The host
+# only fires suspend/resume events when it actually sleeps; an idle screen
+# lock (KDE autolock) and the unlock that follows are NOT power events, so
+# without this nothing tells the TV to come back on when you wake the
+# desktop with a keypress.
+#
+# Listens for the freedesktop ScreenSaver ActiveChanged signal: active=true
+# on lock, active=false on unlock. On unlock → `lg-buddy on`.
+set -euo pipefail
+
+LG_BUDDY="${LG_BUDDY_BIN:-/opt/lg-buddy/bin/lg-buddy}"
+
+# `false` (unlocked) anywhere in the signal line triggers a wake. ActiveChanged
+# carries a single boolean, so this is unambiguous.
+gdbus monitor --session --dest org.freedesktop.ScreenSaver 2>/dev/null \
+  | while read -r line; do
+      case "$line" in
+        *ActiveChanged*false*) "$LG_BUDDY" on || true ;;
+      esac
+    done

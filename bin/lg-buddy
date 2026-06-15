@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# lg-buddy — keep an LG WebOS TV in sync with a host's power/session state.
+#
+# One command, called by every trigger (systemd units, sleep hook, session
+# unlock hook). All config comes from an env file; nothing is hard-coded.
+#
+#   lg-buddy on          wake the TV (or just set the input if already on)
+#   lg-buddy off         power the TV off (skipped if the host is rebooting)
+#   lg-buddy sync-input   switch input only, if the TV is already on
+#   lg-buddy status      print the TV power state (exit 1 if unreachable)
+set -euo pipefail
+
+CONFIG="${LG_BUDDY_ENV:-/etc/lg-buddy/lg-buddy.env}"
+# shellcheck source=/dev/null
+[ -r "$CONFIG" ] && . "$CONFIG"
+
+: "${TV_IP:?TV_IP not set (see $CONFIG)}"
+: "${TV_MAC:?TV_MAC not set (see $CONFIG)}"
+: "${TV_INPUT:=HDMI_2}"
+: "${PAIRING_DB:=/etc/lg-buddy/pairing.db}"
+: "${BSCPYLGTV:=/opt/lg-buddy/venv/bin/bscpylgtvcommand}"
+: "${WOL_COUNT:=3}"      # cold-start WOL packets
+: "${INPUT_RETRIES:=3}"  # set_input attempts after a cold start
+
+log() { echo "lg-buddy: $*"; }
+
+tv()        { "$BSCPYLGTV" -p "$PAIRING_DB" "$TV_IP" "$@"; }
+tv_active() { tv get_power_state 2>/dev/null | grep -q "'state': 'Active'"; }
+wol()       { wakeonlan "$TV_MAC" >/dev/null 2>&1 || true; }
+rebooting() { journalctl -u reboot.target -n 1 --no-pager 2>/dev/null | grep -q "Reached target Reboot"; }
+
+cmd_on() {
+  if tv_active; then
+    log "TV already on → input $TV_INPUT"
+    tv set_input "$TV_INPUT" 2>/dev/null || true
+    return 0
+  fi
+  log "TV off → wake (WOL ×$WOL_COUNT) then input $TV_INPUT"
+  for ((i = 0; i < WOL_COUNT; i++)); do wol; sleep 2; done
+  sleep 6  # let the panel finish booting before talking to it
+  for ((a = 1; a <= INPUT_RETRIES; a++)); do
+    if tv set_input "$TV_INPUT" 2>/dev/null; then
+      log "input set (attempt $a)"
+      return 0
+    fi
+    wol  # in case the wake packet was dropped mid-boot
+    sleep 5
+  done
+  log "TV did not respond after $INPUT_RETRIES attempts"
+  return 1
+}
+
+cmd_off() {
+  if rebooting; then
+    log "host is rebooting → leaving TV on"
+    return 0
+  fi
+  if tv_active; then
+    log "powering TV off"
+    tv power_off 2>/dev/null || true
+  else
+    log "TV already off"
+  fi
+}
+
+cmd_sync_input() { tv_active && tv set_input "$TV_INPUT" 2>/dev/null || true; }
+cmd_status()     { tv get_power_state 2>/dev/null || { log "TV unreachable"; return 1; }; }
+
+case "${1:-}" in
+  on)         cmd_on ;;
+  off)        cmd_off ;;
+  sync-input) cmd_sync_input ;;
+  status)     cmd_status ;;
+  *) echo "usage: lg-buddy {on|off|sync-input|status}" >&2; exit 2 ;;
+esac

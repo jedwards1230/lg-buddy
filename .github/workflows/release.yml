@@ -1,0 +1,94 @@
+# Single-file release pipeline (modeled on jedwards1230/my-wiki + gpu-arbiter).
+#
+# Push to main (or manual dispatch). A `detect` job reads the merged PR's
+# semver label — releases are OPT-IN: no semver:patch|minor|major label → no
+# release. There are no build artifacts (lg-buddy is shell + units), so the
+# shared ai-release.yml@v1 creates the GitHub Release directly
+# (create_release: true) — nothing to chain between tag and release.
+
+name: Release
+
+run-name: >-
+  ${{
+    github.event_name == 'workflow_dispatch'
+      && format('Release: {0}{1}', inputs.dry_run && 'dry-run ' || '', inputs.bump_type)
+      || format('Release: {0}', github.event.head_commit.message || github.sha)
+  }}
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      dry_run:
+        description: "Compute version + preview notes without tagging or publishing"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  detect:
+    name: Detect bump type
+    runs-on: ubuntu-latest
+    outputs:
+      bump_type: ${{ steps.bump.outputs.type }}
+      dry_run: ${{ steps.bump.outputs.dry_run }}
+      release: ${{ steps.bump.outputs.release }}
+    steps:
+      - name: Determine bump type
+        id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TYPE="${{ inputs.bump_type }}"; DRY="${{ inputs.dry_run }}"; RELEASE="true"
+          else
+            LABELS=""
+            for attempt in 1 2 3; do
+              LABELS=$(gh pr list --state merged --base main --limit 100 \
+                --json labels,mergeCommit \
+                | jq -r --arg sha "$GITHUB_SHA" \
+                  '.[] | select(.mergeCommit.oid == $sha) | .labels[].name' 2>/dev/null || echo "")
+              [ -n "$LABELS" ] && break
+              echo "Attempt ${attempt}: no labels for ${GITHUB_SHA} yet, retrying in 5s..."
+              sleep 5
+            done
+            echo "Labels for ${GITHUB_SHA}: ${LABELS:-<none>}"
+            DRY="false"
+            if echo "$LABELS" | grep -q 'semver:major'; then TYPE="major"; RELEASE="true"
+            elif echo "$LABELS" | grep -q 'semver:minor'; then TYPE="minor"; RELEASE="true"
+            elif echo "$LABELS" | grep -q 'semver:patch'; then TYPE="patch"; RELEASE="true"
+            else TYPE="none"; RELEASE="false"; echo "::notice::no semver:* label on the merged PR — skipping release"
+            fi
+          fi
+          { echo "type=$TYPE"; echo "dry_run=$DRY"; echo "release=$RELEASE"; } >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Tag & Release
+    needs: [detect]
+    if: needs.detect.outputs.release == 'true'
+    uses: jedwards1230/release-workflows/.github/workflows/ai-release.yml@v1
+    with:
+      service_name: lg-buddy
+      service_description: "a script that keeps an LG WebOS TV in sync with a Linux host's power and session state"
+      bump_type: ${{ needs.detect.outputs.bump_type }}
+      dry_run: ${{ needs.detect.outputs.dry_run == 'true' }}
+      create_release: true
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

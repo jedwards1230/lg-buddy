@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# systemd-sleep hook — power the TV off before the host sleeps.
+#
+# $1 = pre|post, $2 = suspend|hibernate|hybrid-sleep|suspend-then-hibernate.
+# Resume is handled by lg-buddy-wake.service, so this only acts on the way
+# down. Covers every sleep state (the old hook only matched bare "suspend",
+# so hibernate left the TV on).
+case "$1/$2" in
+  pre/suspend | pre/hibernate | pre/hybrid-sleep | pre/suspend-then-hibernate)
+    /opt/lg-buddy/bin/lg-buddy off || true
+    ;;
+esac
