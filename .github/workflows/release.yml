@@ -1,10 +1,17 @@
-# Single-file release pipeline (modeled on jedwards1230/my-wiki + gpu-arbiter).
+# Single-file release pipeline (build-chain shape, modeled on jedwards1230/gpu-arbiter).
 #
 # Push to main (or manual dispatch). A `detect` job reads the merged PR's
 # semver label — releases are OPT-IN: no semver:patch|minor|major label → no
-# release. There are no build artifacts (lg-buddy is shell + units), so the
-# shared ai-release.yml@v1 creates the GitHub Release directly
-# (create_release: true) — nothing to chain between tag and release.
+# release. lg-buddy ships no compiled artifacts, but it now packages a
+# versioned install tarball (bin/ + systemd/ + env example + README) plus a
+# sha256 checksum and attaches both as GitHub Release assets.
+#
+# To do that it uses the build-chain pattern: the shared ai-release.yml@v1 is
+# called with create_release: false (the `prepare` job) so it only computes the
+# version, creates the tag, and emits the AI-generated release notes; a
+# downstream `package` job builds the tarball from the TAGGED ref (the tag is
+# the single source of truth) and a `release` job decodes the AI body and
+# publishes the Release with the assets via softprops/action-gh-release.
 
 name: Release
 
@@ -79,8 +86,8 @@ jobs:
           fi
           { echo "type=$TYPE"; echo "dry_run=$DRY"; echo "release=$RELEASE"; } >> "$GITHUB_OUTPUT"
 
-  release:
-    name: Tag & Release
+  prepare:
+    name: Tag & Generate Notes
     needs: [detect]
     if: needs.detect.outputs.release == 'true'
     uses: jedwards1230/release-workflows/.github/workflows/ai-release.yml@v1
@@ -89,6 +96,139 @@ jobs:
       service_description: "a script that keeps an LG WebOS TV in sync with a Linux host's power and session state"
       bump_type: ${{ needs.detect.outputs.bump_type }}
       dry_run: ${{ needs.detect.outputs.dry_run == 'true' }}
-      create_release: true
+      create_release: false
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  package:
+    name: Package install tarball
+    needs: [detect, prepare]
+    if: needs.detect.outputs.release == 'true' && needs.detect.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Stage and package tarball
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The git tag is the single source of truth; this checkout is at the
+          # tagged ref. Stage a clean tree (only the runtime files) into a
+          # version-named dir, preserving the executable bit on bin/*.
+          dir="lg-buddy-${VERSION}"
+          mkdir -p "${dir}"
+          cp -a bin "${dir}/bin"
+          cp -a systemd "${dir}/systemd"
+          cp -a lg-buddy.env.example "${dir}/lg-buddy.env.example"
+          cp -a README.md "${dir}/README.md"
+          chmod +x "${dir}"/bin/*
+
+          echo "Tarball contents:"; find "${dir}" -type f | sort
+
+          tar -czf "lg-buddy-${VERSION}.tar.gz" "${dir}"
+          sha256sum "lg-buddy-${VERSION}.tar.gz" > "lg-buddy-${VERSION}.tar.gz.sha256"
+          echo "Checksum:"; cat "lg-buddy-${VERSION}.tar.gz.sha256"
+
+      - name: Upload tarball artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: lg-buddy-tarball
+          path: |
+            lg-buddy-*.tar.gz
+            lg-buddy-*.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: [detect, prepare, package]
+    if: needs.detect.outputs.release == 'true' && needs.detect.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download tarball artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: lg-buddy-tarball
+
+      - name: Compose release body (install snippet + AI notes)
+        env:
+          BODY_B64: ${{ needs.prepare.outputs.release_body }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # ai-release.yml emits a base64-encoded body to survive GitHub Actions'
+          # job-output character restrictions; decode before use.
+          echo "$BODY_B64" | base64 -d > /tmp/ai_body.md
+
+          tgz="lg-buddy-${VERSION}.tar.gz"
+          sha=$(awk '{print $1}' "${tgz}.sha256")
+
+          # Prepend a short install snippet: fetch the tarball, verify the
+          # checksum, unpack, then follow the README to enable the units.
+          {
+            echo "## Install"
+            echo ""
+            echo "Download the install tarball, verify its checksum, and unpack:"
+            echo ""
+            echo '```bash'
+            echo "curl -fsSL -O https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${tgz}"
+            echo "curl -fsSL -O https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${tgz}.sha256"
+            echo "sha256sum -c ${tgz}.sha256"
+            echo "tar -xzf ${tgz}"
+            echo '```'
+            echo ""
+            echo "The tarball bundles \`bin/\`, \`systemd/\`, \`lg-buddy.env.example\`, and \`README.md\`."
+            echo "Install \`bin/\` to \`/opt/lg-buddy/bin/\`, set up a \`bscpylgtv\` venv and"
+            echo "\`/etc/lg-buddy/lg-buddy.env\`, install the units from \`systemd/\`, then enable:"
+            echo ""
+            echo '```bash'
+            echo "systemctl enable --now lg-buddy.service lg-buddy-wake.service"
+            echo "systemctl --user enable --now lg-buddy-unlock.service   # in the graphical session"
+            echo '```'
+            echo ""
+            echo "| Artifact | sha256 |"
+            echo "|----------|--------|"
+            echo "| \`${tgz}\` | \`${sha}\` |"
+            echo ""
+            echo "---"
+            echo ""
+          } > /tmp/release_body.md
+          cat /tmp/ai_body.md >> /tmp/release_body.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: Release ${{ needs.prepare.outputs.version }}
+          body_path: /tmp/release_body.md
+          make_latest: true
+          files: |
+            lg-buddy-*.tar.gz
+            lg-buddy-*.tar.gz.sha256
+
+      - name: Write workflow summary
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          PREV: ${{ needs.prepare.outputs.prev_tag }}
+          BUMP_TYPE: ${{ needs.prepare.outputs.bump_type }}
+        run: |
+          {
+            echo "## Release ${TAG}"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| Version | ${VERSION} |"
+            echo "| Tag | ${TAG} |"
+            echo "| Previous | ${PREV} |"
+            echo "| Bump | ${BUMP_TYPE} |"
+            echo "| Artifact | \`lg-buddy-${VERSION}.tar.gz\` (+ .sha256) |"
+          } >> "$GITHUB_STEP_SUMMARY"
