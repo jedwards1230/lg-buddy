@@ -135,6 +135,12 @@ jobs:
           sha256sum "lg-buddy-${VERSION}.tar.gz" > "lg-buddy-${VERSION}.tar.gz.sha256"
           echo "Checksum:"; cat "lg-buddy-${VERSION}.tar.gz.sha256"
 
+          # Fail loudly if the tarball wasn't produced at the expected path
+          # (e.g. a VERSION miscalc), rather than leaving the upload step's
+          # if-no-files-found to surface it later with misleading context.
+          test -s "lg-buddy-${VERSION}.tar.gz" \
+            || { echo "ERROR: expected tarball lg-buddy-${VERSION}.tar.gz missing or empty"; exit 1; }
+
       - name: Upload tarball artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -165,8 +171,12 @@ jobs:
         run: |
           set -euo pipefail
           # ai-release.yml emits a base64-encoded body to survive GitHub Actions'
-          # job-output character restrictions; decode before use.
-          echo "$BODY_B64" | base64 -d > /tmp/ai_body.md
+          # job-output character restrictions; decode before use. Fail loudly on a
+          # bad/empty decode so we never publish a Release with missing notes.
+          echo "$BODY_B64" | base64 -d > /tmp/ai_body.md \
+            || { echo "ERROR: failed to base64-decode release notes body"; exit 1; }
+          test -s /tmp/ai_body.md \
+            || { echo "ERROR: decoded release notes body is empty"; exit 1; }
 
           tgz="lg-buddy-${VERSION}.tar.gz"
           sha=$(awk '{print $1}' "${tgz}.sha256")
