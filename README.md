@@ -48,6 +48,12 @@ systemctl --user enable --now lg-buddy-unlock.service   # in the graphical sessi
 This is deployed in the homelab via the `desktop-common` Ansible role
 (gated by `desktop_install_lg_buddy`).
 
+Each tagged release also ships a `lg-buddy-<version>.tar.gz` install tarball
+(plus a `.sha256` checksum) bundling `bin/`, `systemd/`, `lg-buddy.env.example`,
+and this README — a self-contained alternative to the Ansible install. Verify it
+with `sha256sum -c lg-buddy-<version>.tar.gz.sha256`, unpack, and follow the
+steps above.
+
 ## Config
 
 | Var | Purpose |
