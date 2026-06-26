@@ -6,20 +6,31 @@
 
 - `bash`
 - `python3` with [`bscpylgtv`](https://github.com/chros73/bscpylgtv) — the WebOS control library the scripts shell out to
-- A reachable LG WebOS TV (with a saved pairing DB) to exercise behavior end-to-end
+- `wakeonlan` (cold-start WOL) and `gdbus` (the unlock listener's D-Bus monitor) — both invoked directly by the scripts
+- `systemd` — to exercise the units and the sleep hook
+- A reachable LG WebOS TV with a saved pairing DB (and a running graphical session, for the unlock path) to exercise behavior end-to-end
 - `shellcheck` (optional, recommended) — to lint the scripts locally
 
 ## Build, test & lint
 
-This is pure Bash — there is no build step, test suite, or lint job in CI; the automated PR review is the quality gate. Before pushing, lint the scripts and smoke-test against a real TV:
+This is pure Bash — there is no build step, test suite, or lint job in CI; the automated PR review is the quality gate. Before pushing, lint the scripts and smoke-test the paths your change touches. Point `LG_BUDDY_ENV` at your own env file — the installed `/etc/lg-buddy/lg-buddy.env` won't exist until after a deploy:
 
 ```bash
 # Lint the shell scripts locally (recommended; not run in CI)
 shellcheck bin/lg-buddy bin/lg-buddy-unlock-listen
 
-# Smoke-test the entry point against your configured TV
-LG_BUDDY_ENV=/etc/lg-buddy/lg-buddy.env bin/lg-buddy status
+# Copy the example and fill in your TV's details (TV_IP, TV_MAC, TV_INPUT, PAIRING_DB)
+cp lg-buddy.env.example /tmp/lg-buddy.env
+export LG_BUDDY_ENV=/tmp/lg-buddy.env
+
+# Exercise the subcommand(s) your change affects
+bin/lg-buddy status          # safe: query only
+bin/lg-buddy on              # wake + select input
+bin/lg-buddy sync-input      # re-select input (safe if the TV is already on)
+bin/lg-buddy off             # power off
 ```
+
+> Watch for the WebOS **1008 throttle** when testing `on`/`off` — rapid reconnects trip it and it doesn't self-clear, so space out repeated runs. Keep `PAIRING_DB` on a persistent path so a lost token doesn't force the TV to re-pair.
 
 ## Documentation
 
@@ -27,7 +38,9 @@ Keep documentation current as part of the change, not as a follow-up — update 
 
 ## Before you open a PR
 
-- Lint with `shellcheck` and smoke-test the affected path against a real TV.
+- Lint with `shellcheck` and smoke-test the subcommand(s) your change affects against a real TV.
+- For systemd unit or sleep-hook changes, run `sudo systemctl daemon-reload` and invoke the unit/hook manually (e.g. `sudo /lib/systemd/system-sleep/lg-buddy pre`) to confirm it's recognized and fires.
+- For unlock-listener changes, verify it fires on unlock in a running graphical session.
 - Never commit real credentials or the TV's IP/MAC — `*.env` is gitignored (only `*.env.example` is tracked).
 
 ## Branching & commits
