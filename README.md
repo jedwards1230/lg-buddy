@@ -63,3 +63,7 @@ steps above.
 | `PAIRING_DB` | WebOS pairing token DB (keep on a wipe-surviving partition) |
 | `BSCPYLGTV` | path to the `bscpylgtv` CLI |
 | `WOL_COUNT` / `INPUT_RETRIES` | cold-start tuning |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites, the lint/smoke-test workflow, and the PR & release process.
