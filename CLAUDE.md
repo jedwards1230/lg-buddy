@@ -1,5 +1,7 @@
 # lg-buddy
 
+@CONTRIBUTING.md
+
 Keep an LG WebOS TV in sync with a Linux host's power and session state. Bash CLI + systemd units — no compiled artifacts.
 
 ## Overview
@@ -75,4 +77,3 @@ The `on` path: if TV is already active, re-select input only. If off, spray `WOL
 - **Session unlock vs power events**: idle screen-lock and unlock are NOT power/resume events — `lg-buddy-wake.service` and the sleep hook never fire for them. `lg-buddy-unlock-listen` exists specifically to cover this gap via D-Bus `ScreenSaver.ActiveChanged`.
 - **Config is gitignored**: `*.env` is in `.gitignore` (with `!*.env.example` exception). Never commit actual credentials or IP/MAC addresses.
 - **No build step**: pure Bash — no compilation, no test suite, no linter CI. The PR review workflow (`claude-pr-review.yml`) is the quality gate.
-- **Release**: opt-in — label a merged PR `semver:patch`, `semver:minor`, or `semver:major` to trigger a release. No label → no release. The release workflow builds and attaches the install tarball.
