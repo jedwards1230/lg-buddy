@@ -6,7 +6,7 @@ name: PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    types: [opened, synchronize, ready_for_review, reopened, closed]
 
 permissions:
   contents: read
@@ -16,6 +16,7 @@ permissions:
 
 jobs:
   review:
+    if: github.event.action != 'closed'
     uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review.yml@v1
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -37,3 +38,11 @@ jobs:
         Do NOT re-flag shfmt formatting nits — keep it to real correctness,
         safety, and reliability issues. You cannot run the scripts, so do not
         claim runtime results.
+
+  cancel-review:
+    if: github.event.action == 'closed'
+    permissions:
+      actions: write
+    uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review-cancel.yml@v1
+    with:
+      review_workflow: "PR Review"
